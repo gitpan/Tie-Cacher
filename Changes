@@ -1,0 +1,12 @@
+Revision history for Perl extension Tie::Cacher.
+
+0.01  Sun May  4 15:31:39 2003
+	- original version; created by h2xs 1.22 with options
+		-X -n Tie::Cacher
+        - import existing ad hoc version
+
+0.02  Sun May  4
+        - Remove some old interfaces
+
+0.03  Mon May  5
+        - Last cleanups for CPAN distribution

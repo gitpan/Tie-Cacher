@@ -1,7 +1,12 @@
 Revision history for Perl extension Tie::Cacher.
 
-Need to add tests for deleting non-existent elements
+Need to add tests for
+  - deleting non-existent elements
+  - Node reuse
 
+0.09  Mon Jun  8 2004
+	- Reusing a freed node is a bug. The user can still have private
+	  references, they can even be in a callback.
 0.08  Sun Jun  7 2004
 	- Move case equal names out of the autoloaded section. Causes problems
 	  on windows.

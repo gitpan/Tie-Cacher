@@ -5,7 +5,7 @@ use warnings;
 
 use AutoLoader qw(AUTOLOAD);
 
-our $VERSION = "0.08";
+our $VERSION = "0.09";
 use Carp;
 
 use base qw(Tie::Hash);
@@ -190,9 +190,8 @@ sub fetch {
             delete $cacher->[TC_NODES]{$node->[TC_KEY]};
         } else {
             $cacher->[TC_COUNT]++;
-            $node = [];
         }
-        $cacher->[TC_NODES]{$_[1]} = $node;
+        $cacher->[TC_NODES]{$_[1]} = $node = [];
         $node->[TC_KEY] = $_[1];
 
         # Create node in front
@@ -246,9 +245,8 @@ sub fetch_node {
             delete $cacher->[TC_NODES]{$node->[TC_KEY]};
         } else {
             $cacher->[TC_COUNT]++;
-            $node = [];
         }
-        $cacher->[TC_NODES]{$_[1]} = $node;
+        $cacher->[TC_NODES]{$_[1]} = $node = [];
         $node->[TC_KEY] = $_[1];
 
         # Create node in front
@@ -790,7 +788,7 @@ Returns the old value
 Return the number of times a L<fetch|"fetch"> or L<fetch_node|"fetch_node">
 on a key found that key to not exist yet.
 
-=item $old_missed = $cache->hit($new_missed)
+=item $old_missed = $cache->missed($new_missed)
 
 Sets the number of misses to $new_missed (typically 0 will be used here).
 Returns the old value

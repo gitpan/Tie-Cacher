@@ -5,34 +5,34 @@ use warnings;
 
 use AutoLoader qw(AUTOLOAD);
 
-our $VERSION = "0.07";
+our $VERSION = "0.08";
 use Carp;
 
 use base qw(Tie::Hash);
 
-sub TC_HEAD()	{ 0 };
-sub TC_NODES()	{ 1 };
-sub TC_HIT()	{ 2 };
-sub TC_MISSED()	{ 3 };
-sub TC_COUNT()	{ 4 };
+# Object indices
+sub TC_HEAD	() { 0 };
+sub TC_NODES	() { 1 };
+sub TC_HIT	() { 2 };
+sub TC_MISSED	() { 3 };
+# We could get the effect of count by using keys, but it would reset
+# first_key/last_key
+sub TC_COUNT	() { 4 };
 sub TC_MAX_COUNT() { 5 };
-sub TC_VALIDATE() { 6 };
-sub TC_LOAD()	{ 7 };
-sub TC_SAVE()	{ 8 };
+sub TC_VALIDATE	() { 6 };
+sub TC_LOAD	() { 7 };
+sub TC_SAVE	() { 8 };
 sub TC_USER_DATA() { 9 };
 
 # Node indices
-sub TC_DATA()	{ 0 };	# Must be zero (documented as valid accessmethod)
-sub TC_KEY()	{ 1 };
-sub TC_PREVIOUS() { 2 };
-sub TC_NEXT()	{ 3 };
+sub TC_DATA	() { 0 };	# Must be zero (documented accessmethod)
+sub TC_KEY	() { 1 };
+sub TC_PREVIOUS	() { 2 };
+sub TC_NEXT	() { 3 };
 sub TC_NODE_SIZE() { 4 };
 
 # This should effectively give us +inf
-sub INF() { 1e5000000000 };
-
-# We could get the effect of count by using keys, but it would reset
-# first_key/last_key
+sub INF	() { 1e5000000000 };
 
 my %attributes = map {($_, 1)} qw(validate load save max_count user_data);
 sub new {
@@ -67,6 +67,19 @@ sub new {
     return $cacher;
 }
 
+sub keys : method {
+    return CORE::keys %{shift->[TC_NODES]};
+}
+
+sub exists : method {
+    my $cacher = shift;
+    return exists $cacher->[TC_NODES]{shift()};
+}
+
+sub count {
+    return shift->[TC_COUNT]
+}
+
 sub DESTROY {
     my $cacher = shift;
 
@@ -87,25 +100,21 @@ sub DESTROY {
     }
 }
 
+*clear		= \&DESTROY;
+
+# Tie interface aliasas
+*STORE		= \&store;
+*FETCH		= \&fetch;
+*TIEHASH	= \&new;
+*FIRSTKEY	= \&first_key;
+*NEXTKEY	= \&next_key;
+*EXISTS		= \&exists;
+*DELETE		= \&delete;
+*CLEAR		= \&clear;
+
 1;
 
 __END__
-
-sub TIEHASH {
-    {
-        local $^W;
-        *TIEHASH = \&new;
-    }
-    goto &TIEHASH;
-}
-
-sub STORE {
-    {
-        local $^W;
-        *STORE = \&store;
-    }
-    goto &STORE;
-}
 
 sub store {
     my $cacher = $_[0];
@@ -144,14 +153,6 @@ sub store {
             die $@;
         }
     }
-}
-
-sub FETCH {
-    {
-        local $^W;
-        *FETCH = \&fetch;
-    }
-    goto &FETCH;
 }
 
 sub fetch {
@@ -266,19 +267,6 @@ sub fetch_node {
     die $@;
 }
 
-sub keys : method {
-    my $cacher = shift;
-    return CORE::keys %{$cacher->[TC_NODES]};
-}
-
-sub FIRSTKEY {
-    {
-        local $^W;
-        *FIRSTKEY = \&first_key;
-    }
-    goto &FIRSTKEY;
-}
-
 sub first_key {
     my $cacher = shift;
     CORE::keys %{$cacher->[TC_NODES]};
@@ -287,40 +275,11 @@ sub first_key {
     return ($work[0], $work[1][TC_DATA]);
 }
 
-sub NEXTKEY {
-    {
-        local $^W;
-        *NEXTKEY = \&next_key;
-    }
-    goto &NEXTKEY;
-}
-
 sub next_key {
     my $cacher = shift;
     return each %{$cacher->[TC_NODES]} unless wantarray;
     my @work = each %{$cacher->[TC_NODES]} or return;
     return ($work[0], $work[1][TC_DATA]);
-}
-
-sub EXISTS {
-    {
-        local $^W;
-        *EXISTS = \&exists;
-    }
-    goto &EXISTS;
-}
-
-sub exists : method {
-    my $cacher = shift;
-    return exists $cacher->[TC_NODES]{shift()};
-}
-
-sub DELETE {
-    {
-        local $^W;
-        *DELETE = \&delete;
-    }
-    goto &DELETE;
 }
 
 sub delete : method {
@@ -370,22 +329,6 @@ sub delete : method {
     }
 }
 
-sub CLEAR {
-    {
-        local $^W;
-        *CLEAR = \&clear;
-    }
-    goto &CLEAR;
-}
-
-sub clear {
-    {
-        local $^W;
-        *clear = \&DESTROY;
-    }
-    goto &clear;
-}
-
 sub recent_keys {
     my @keys;
     my $head = shift->[TC_HEAD];
@@ -416,10 +359,6 @@ sub oldest_key {
     my $here = $head->[TC_PREVIOUS];
     return if $here == $head;
     return $here->[TC_KEY]
-}
-
-sub count {
-    return shift->[TC_COUNT]
 }
 
 sub missed {

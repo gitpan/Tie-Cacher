@@ -5,7 +5,7 @@ use ExtUtils::MakeMaker;
 WriteMakefile(
     'NAME'		=> 'Tie::Cacher',
     'VERSION_FROM'	=> 'Cacher.pm', # finds $VERSION
-    'PREREQ_PM'		=> {}, # e.g., Module::Name => 1.1
+    'PREREQ_PM'		=> {Test::More => 0.11},
     ($] >= 5.005 ?    ## Add these new keywords supported since 5.005
       (AUTHOR     => 'Ton Hospel <Tie::Cacher@ton.iguana.be>') : ()),
 );

@@ -5,7 +5,7 @@ use strict;
 use warnings;
 #########################
 
-use Test::More tests => 3057;
+use Test::More tests => 3112;
 BEGIN { $^W = 1 };
 BEGIN { use_ok('Tie::Cacher') };
 
@@ -53,12 +53,12 @@ sub basic_run {
     $append = "" unless $append;
     my $load = $data->load;
     my $save = $data->save;
-    # Compensate for the fact that tied each in list context does a fetch
+    # Compensate for the fact that tied "each" in list context does a fetch
     my $tie = $data->isa("MapTie") ? $append : "";
 
     empty_test($data);
-    is($data->missed,  0, "missed 0 on start");
-    is($data->hit,   0, "hit 0 on start");
+    is($data->missed,	0, "missed 0 on start");
+    is($data->hit,	0, "hit 0 on start");
     @save = ();
     my $get = $data->fetch("foo");
     if ($load) {
@@ -141,6 +141,7 @@ sub basic_run {
     $data->store("foo2", "bar2");
     $data->store("foo3", "bar3");
     $data->store("foo4", "bar4");
+    my @validates = ("") x 5;
     is($data->count, $max_count || 4, "count $max_count after adding some");
     is($data->keys,  $max_count || 4, "testing keys in scalar context");
     is($data->recent_keys, $max_count || 4,
@@ -160,6 +161,7 @@ sub basic_run {
 
     $get = $data->fetch("foo2");
     my @foo2 = $max_count ? "foo2" : ();
+    $validates[2] .= $append if @foo2;
     is_deeply([@recent = $data->recent_keys], [@foo2, qw(foo4 foo3), @foo1],
               "testing recent_ list context");
     is_deeply([@old = $data->old_keys], [@foo1, qw(foo3 foo4), @foo2],
@@ -168,20 +170,25 @@ sub basic_run {
     is($recent[0], $data->most_recent_key, "most recent in front");
     is($recent[-1], $data->oldest_key, "least recent at the back");
 
-    my $first = $data->first_key;
+    my $f = my $first = $data->first_key;
+    $f =~ s/foo//;
     is(grep($_ eq $first, @foo1, qw(foo3 foo4), @foo2), 1, "scalar first key is one of the keys");
     my @first = $data->first_key;
+    $validates[$f] .= $tie;
     is (@first, 2, "list context first_key returns 2 values");
     is($first[0], $first, "list first_key refers the same entry as scalar first key");
     return unless $max_count;
 
+    is($first[1], "bar$f$validates[$f]",
+       "list context first_key implies right value");
     $get = $data->fetch($first);
-    $first =~ s/foo//;
-    $first .= $tie;
-    is($get, "bar$first$append", "fetch the right value");
-    is($get, $first[1].$append, "list context first_key implies right value");
+    $validates[$f] .= $append;
+    is($get, "bar$f$validates[$f]", "fetch the right value");
     my $second = $data->next_key;
-    my @third = $data->next_key;
+    my @third  = $data->next_key;
+    $f = $third[0];
+    $f =~ s/foo//;
+    $validates[$f] .= $tie;
     my ($k, @rest);
     while ($k = $data->next_key) {
         push(@rest, $k);
@@ -199,14 +206,18 @@ sub basic_run {
     while (@first = $data->next_key) {
         is(@first, 2, "next_key fetches 2 values");
         $get = $data->fetch($first[0]);
-        is($get, $first[1].$append, "list context next_key fetches right value");
+        my $f = $first[0];
+        $f =~ s/foo//;
+        $validates[$f] .= $append;
+        is($get, $first[1].$append,
+           "list context next_key fetches right value");
         push(@rest, $first[0]);
     }
     is_deeply([sort @rest], [@foo1, qw(foo2 foo3 foo4)],
               "first/next key (list) repeated should get all keys");
 
     $get = $data->delete("foo4");
-    is($get, "bar4$append$tie", "deleted value was bar4");
+    is($get, "bar4$validates[4]$tie", "deleted value was bar4");
     is($data->count, $max_count-1, "one less element after delete");
     ok(!$data->exists("foo4"), "deleted value does not exist anymore");
     $data->store("foo4", "baz4");
@@ -218,7 +229,7 @@ sub basic_run {
     ok(!$data->exists("foo5"), "deleting must not create value");
 
     $get = $data->delete("foo4", "foo3");
-    is($get, "bar3$append$tie$tie", "deleted value was bar3");
+    is($get, "bar3$validates[3]$tie", "deleted value was bar3");
     is($data->count, $max_count-2, "two less elements after delete");
     ok(!$data->exists("foo4"), "deleted value does not exist anymore");
     ok(!$data->exists("foo3"), "deleted value does not exist anymore");
@@ -391,7 +402,7 @@ sub basic_run {
 sub nop {}
 
 my $refcount;
-for my $class (qw( MapTie Tie::Cacher)) {
+for my $class (qw(Tie::Cacher MapTie)) {
     my %options = (validate => \&nop,
                    load => \&nop,
                    save => \&nop,
@@ -503,16 +514,22 @@ for my $class (qw( MapTie Tie::Cacher)) {
 
     say("$class: Load on demand and save");
     # Just load and save: autocreate non-existing elements to "a"
-    $data = eval { $class->new(load => sub {
-        my ($self, $key, $node) = @_;
-        $node->[0] .= "a";
-    },
+    $data = eval { $class->new(user_data => "waf",
+                               load => sub {
+                                   my ($self, $key, $node) = @_;
+                                   $node->[0] .= "a";
+                               },
                                save => sub {
                                    my ($self, $key, $node) = @_;
                                    push(@save, $key, $node->[0]);
                                },
                                ); };
     is($@, "", "new croaked");
+    is($data->user_data, "waf", "Userdata set");
+    is($data->user_data("foo"), "waf", "Get old userdata");
+    is($data->user_data("baz"), "foo", "Get old userdata");
+    is($data->user_data, "baz", "Most recent userdata set");
+    is($data->user_data, "baz", "Most recent userdata remains set");
     basic_run($data, 4);
 
     say("$class: Always load");
@@ -523,6 +540,11 @@ for my $class (qw( MapTie Tie::Cacher)) {
                                    $node->[0] .= "a";
                                }); };
     is($@, "", "new croaked");
+    is($data->user_data, undef, "No userdata set");
+    is($data->user_data("foo"), undef, "Get old userdata");
+    is($data->user_data("baz"), "foo", "Get old userdata");
+    is($data->user_data, "baz", "Most recent userdata set");
+    is($data->user_data, "baz", "Most recent userdata remains set");
     basic_run($data, 4, "a");
 
     # Check load exception
@@ -564,5 +586,31 @@ for my $class (qw( MapTie Tie::Cacher)) {
     eval { $data->fetch("foo") };
     ok($@, "failed validate exception passed on");
     ok($data->exists("foo"), "failing validate does not delete");
-}
 
+    # Check all ways of deleting elements
+    for ([], ["b"], ["b", "c"]) {
+        # Void context
+        $data = $class->new(validate => sub { die "\n" });
+        $data->store($_ => "bar$_") for "a".."z";
+        $data->delete(@$_);
+        is($data->count, 26 - @$_, "Correct number of elements removed");
+
+        # Scalar context
+        $data = $class->new(user_data => "waf", validate => sub { die "\n" });
+        $data->store($_ => "bar$_") for "a".."z";
+        my $out = $data->delete(@$_);
+        is($data->count, 26 - @$_, "Correct number of elements removed");
+        is($out, $_->[-1] && "bar" . $_->[-1], "Correct value returned") unless
+            @$_ == 0 && $data->isa("MapTie");
+
+        # List context
+        $data = $class->new(validate => sub { die "\n" });
+        $data->store($_ => "bar$_") for "a".."z";
+        my @out = $data->delete(@$_);
+        is($data->count, 26 - @$_, "Correct number of elements removed");
+        is(@out, @$_, "Return as many values as deleted");
+        for my $n (0..$#out) {
+            is($out[$n], "bar" . $_->[$n], "Correct value returned");
+        }
+    }
+}

@@ -5,42 +5,47 @@ use warnings;
 
 use AutoLoader qw(AUTOLOAD);
 
-our $VERSION = "0.04";
+our $VERSION = "0.06";
 use Carp;
 
 use base qw(Tie::Hash);
-use fields qw(head nodes hit missed count max_count validate load save);
+use constant {
+    # Cacher indices
+    TC_HEAD	=> 1,
+    TC_NODES	=> 2,
+    TC_HIT	=> 3,
+    TC_MISSED	=> 4,
+    TC_COUNT	=> 5,
+    TC_MAX_COUNT=> 6,
+    TC_VALIDATE => 7,
+    TC_LOAD	=> 8,
+    TC_SAVE	=> 9,
 
-# This should effectively give us inf
-use constant INF => 1e50;
+    # Node indices
+    TC_KEY       => 1,
+    TC_PREVIOUS  => 2,
+    TC_NEXT      => 3,
+    TC_NODE_SIZE => 4,
+
+    # This should effectively give us +inf
+    INF		=> 1e5000000000,
+};
 
 # We could get the effect of count by using keys, but it would reset
 # first_key/last_key
-
-package Tie::Cacher::Node;
-use fields qw(key previous next);
-
-package Tie::Cacher;
-
-# Dirty hacks
-use constant KEY       => $Tie::Cacher::Node::FIELDS{"key"};
-use constant PREVIOUS  => $Tie::Cacher::Node::FIELDS{"previous"};
-use constant NEXT      => $Tie::Cacher::Node::FIELDS{"next"};
-use constant NODE_SIZE => 1+NEXT;
 
 my %attributes = map {($_, 1)} qw(validate load save max_count user_data);
 sub new {
     defined(my $class = shift) ||
         croak "Too few arguments. Usage: Tie::Cacher->new(key-val-pairs)";
-    my __PACKAGE__ $self = bless [], $class;
-
-    my Tie::Cacher::Node $head = [];
-    $self->{"head"} = $head;
-    $head->{"next"} = $head;
-    $head->{"previous"} = $head;
-    $self->{"hit"} = $self->{"missed"} = $self->{"count"} = 0;
-    $self->{"max_count"} = INF;
-    $self->{"nodes"} = {};
+    my $cacher = bless [], $class;
+    my $head = [];
+    $cacher->[TC_HEAD] = $head;
+    $head->[TC_NEXT] = $head;
+    $head->[TC_PREVIOUS] = $head;
+    $cacher->[TC_HIT] = $cacher->[TC_MISSED] = $cacher->[TC_COUNT] = 0;
+    $cacher->[TC_MAX_COUNT] = INF;
+    $cacher->[TC_NODES] = {};
 
     if (@_ % 2) {
         if (@_ == 1) {
@@ -56,29 +61,29 @@ sub new {
     while (@_) {
         my $key = shift;
         $attributes{$key} || croak "Unknown key $key in $class->new, $class";
-        $self->$key(shift);
+        $cacher->$key(shift);
     }
-    $self->{"max_count"} ||= INF;	# Infinity really
-    return $self;
+    $cacher->[TC_MAX_COUNT] ||= INF;	# Infinity really
+    return $cacher;
 }
 
 sub DESTROY {
-    my __PACKAGE__ $self = shift;
+    my $cacher = shift;
 
     # Make nodes single connected
-    $self->{"nodes"} = {};
-    my Tie::Cacher::Node $head = $self->{"head"};
-    my Tie::Cacher::Node $ptr = $head->{"previous"};
-    undef $ptr->{"next"};
-    $ptr = $head->{"next"};
-    $head->{"next"} = $head->{"previous"} = $head;
-    $self->{"count"} = 0;
+    $cacher->[TC_NODES] = {};
+    my $head = $cacher->[TC_HEAD];
+    my $ptr = $head->[TC_PREVIOUS];
+    undef $ptr->[TC_NEXT];
+    $ptr = $head->[TC_NEXT];
+    $head->[TC_NEXT] = $head->[TC_PREVIOUS] = $head;
+    $cacher->[TC_COUNT] = 0;
 
     while ($ptr) {
         # We must remove both the forward and backward links, otherwise
         # perl will do a recursive free and might run out of stackspace
-        undef $ptr->{"previous"};
-        $ptr = delete $ptr->[NEXT];
+        undef $ptr->[TC_PREVIOUS];
+        $ptr = delete $ptr->[TC_NEXT];
     }
 }
 
@@ -103,49 +108,39 @@ sub STORE {
 }
 
 sub store {
-    my __PACKAGE__ $self = $_[0];
-    my Tie::Cacher::Node ($next, $prev);
-    my Tie::Cacher::Node $node = $self->{"nodes"}{$_[1]};
+    my $cacher = $_[0];
+    my $node = $cacher->[TC_NODES]{$_[1]};
     if ($node) {
-        # Already exists
-        $next = $node->{"next"};
-        # Detach node
-        $prev = $node->{"previous"};
-        $prev->{"next"} = $next;
-        $next->{"previous"} = $prev;
+        $node->[TC_PREVIOUS][TC_NEXT] = $node->[TC_NEXT];
+        $node->[TC_NEXT][TC_PREVIOUS] = $node->[TC_PREVIOUS];
     } else {
-        if ($self->{"count"} >= $self->{"max_count"}) {
+        if ($cacher->[TC_COUNT] >= $cacher->[TC_MAX_COUNT]) {
             # Drop an old one
-            $next = $self->{"head"};
-            $node = $next->{"previous"};
-            delete $self->{"nodes"}{$node->{"key"}};
+            my $head = $cacher->[TC_HEAD];
+            $node = $head->[TC_PREVIOUS];
+            ($head->[TC_PREVIOUS] = $node->[TC_PREVIOUS])->[TC_NEXT] = $head;
             # Already existed
-            $prev = $node->{"previous"};
-            $prev->{"next"} = $next;
-            $next->{"previous"} = $prev;
+            delete $cacher->[TC_NODES]{$node->[TC_KEY]};
         } else {
-            $self->{"count"}++;
+            $cacher->[TC_COUNT]++;
         }
-        $self->{"nodes"}{$_[1]} = $node = [];
-        $node->{"key"} = $_[1];
+        $cacher->[TC_NODES]{$_[1]} = $node = [];
+        $node->[TC_KEY] = $_[1];
     }
     $node->[0] = $_[2];
 
     # Reattach node in front
-    $prev = $self->{"head"};
-    $next = $prev->{"next"};
-    $prev->{"next"} = $node;
-    $node->{"next"} = $next;
-    $node->{"previous"} = $prev;
-    $next->{"previous"} = $node;
+    my $head = $node->[TC_PREVIOUS] = $cacher->[TC_HEAD];
+    my $next = $node->[TC_NEXT]	    = $head->[TC_NEXT];
+    $head->[TC_NEXT] = $next->[TC_PREVIOUS] = $node;
 
-    if ($self->{"save"}) {
+    if ($cacher->[TC_SAVE]) {
         splice(@_, 2, 1, $node);
         eval {
-            &{$self->{"save"}};
+            &{$cacher->[TC_SAVE]};
         };
         if ($@) {
-            $self->delete($_[1]);
+            $cacher->delete($_[1]);
             die $@;
         }
     }
@@ -160,140 +155,120 @@ sub FETCH {
 }
 
 sub fetch {
-    my __PACKAGE__ $self = $_[0];
-    my Tie::Cacher::Node $node = $self->{"nodes"}{$_[1]};
+    my $cacher = $_[0];
+    my $node = $cacher->[TC_NODES]{$_[1]};
     if ($node) {
         # Aha, existence is assured
-        $self->{"hit"}++;
+        $cacher->[TC_HIT]++;
 
         # Detach node
-        my Tie::Cacher::Node $next = $node->{"next"};
-        my Tie::Cacher::Node $prev = $node->{"previous"};
-        $prev->{"next"} = $next;
-        $next->{"previous"} = $prev;
+        $node->[TC_NEXT][TC_PREVIOUS] = $node->[TC_PREVIOUS];
+        $node->[TC_PREVIOUS][TC_NEXT] = $node->[TC_NEXT];
 
         # Reattach node in front
-        $prev = $self->{"head"};
-        $next = $prev->{"next"};
-        $prev->{"next"} = $node;
-        $node->{"next"} = $next;
-        $node->{"previous"} = $prev;
-        $next->{"previous"} = $node;
+        my $head = $node->[TC_PREVIOUS] = $cacher->[TC_HEAD];
+        my $next = $node->[TC_NEXT]	    = $head->[TC_NEXT];
+        $head->[TC_NEXT] = $next->[TC_PREVIOUS] = $node;
 
-        return $node->[0] unless $self->{"validate"};
+        return $node->[0] unless $cacher->[TC_VALIDATE];
         push(@_, $node);
-        return $node->[0] if &{$self->{"validate"}};
-        unless ($self->{"load"}) {
-            $self->delete($_[1]);
+        return $node->[0] if &{$cacher->[TC_VALIDATE]};
+        unless ($cacher->[TC_LOAD]) {
+            $cacher->delete($_[1]);
             return;
         }
     } else {
         # Nope, new entry
-        $self->{"missed"}++;
-        return unless $self->{"load"};
-        my Tie::Cacher::Node ($next, $prev);
-        if ($self->{"count"} >= $self->{"max_count"}) {
+        $cacher->[TC_MISSED]++;
+        return unless $cacher->[TC_LOAD];
+        if ($cacher->[TC_COUNT] >= $cacher->[TC_MAX_COUNT]) {
             # Drop an old one
-            $next = $self->{"head"};
-            $node = $next->{"previous"};
-            $prev = $node->{"previous"};
-            $prev->{"next"} = $next;
-            $next->{"previous"} = $prev;
-            delete $self->{"nodes"}{$node->{"key"}};
+            my $head = $cacher->[TC_HEAD];
+            $node = $head->[TC_PREVIOUS];
+            ($head->[TC_PREVIOUS] = $node->[TC_PREVIOUS])->[TC_NEXT] = $head;
+            delete $cacher->[TC_NODES]{$node->[TC_KEY]};
         } else {
-            $self->{"count"}++;
+            $cacher->[TC_COUNT]++;
             $node = [];
         }
-        $self->{"nodes"}{$_[1]} = $node;
-        $node->{"key"} = $_[1];
+        $cacher->[TC_NODES]{$_[1]} = $node;
+        $node->[TC_KEY] = $_[1];
 
         # Create node in front
-        $prev = $self->{"head"};
-        $next = $prev->{"next"};
-        $prev->{"next"} = $node;
-        $node->{"next"} = $next;
-        $node->{"previous"} = $prev;
-        $next->{"previous"} = $node;
+        my $head = $node->[TC_PREVIOUS] = $cacher->[TC_HEAD];
+        my $next = $node->[TC_NEXT]	= $head->[TC_NEXT];
+        $head->[TC_NEXT] = $next->[TC_PREVIOUS] = $node;
+
         push(@_, $node);
     }
     eval {
-        &{$self->{"load"}};
-        &{$self->{"save"}} if $self->{"save"};
+        &{$cacher->[TC_LOAD]};
+        &{$cacher->[TC_SAVE]} if $cacher->[TC_SAVE];
     };
     return $node->[0] unless $@;
-    $self->delete($_[1]);
+    $cacher->delete($_[1]);
     die $@;
 }
 
 sub fetch_node {
-    my __PACKAGE__ $self = $_[0];
-    my Tie::Cacher::Node $node = $self->{"nodes"}{$_[1]};
+    my $cacher = $_[0];
+    my $node = $cacher->[TC_NODES]{$_[1]};
     if ($node) {
         # Aha, existence is assured
-        $self->{"hit"}++;
+        $cacher->[TC_HIT]++;
 
         # Detach node
-        my Tie::Cacher::Node $next = $node->{"next"};
-        my Tie::Cacher::Node $prev = $node->{"previous"};
-        $prev->{"next"} = $next;
-        $next->{"previous"} = $prev;
+        $node->[TC_NEXT][TC_PREVIOUS] = $node->[TC_PREVIOUS];
+        $node->[TC_PREVIOUS][TC_NEXT] = $node->[TC_NEXT];
 
         # Reattach node in front
-        $prev = $self->{"head"};
-        $next = $prev->{"next"};
-        $prev->{"next"} = $node;
-        $node->{"next"} = $next;
-        $node->{"previous"} = $prev;
-        $next->{"previous"} = $node;
+        my $head = $node->[TC_PREVIOUS] = $cacher->[TC_HEAD];
+        my $next = $node->[TC_NEXT]	    = $head->[TC_NEXT];
+        $head->[TC_NEXT] = $next->[TC_PREVIOUS] = $node;
 
-        return $node unless $self->{"validate"};
+        return $node unless $cacher->[TC_VALIDATE];
         push(@_, $node);
-        return $node if &{$self->{"validate"}};
-        unless ($self->{"load"}) {
-            $self->delete($_[1]);
+        return $node if &{$cacher->[TC_VALIDATE]};
+        unless ($cacher->[TC_LOAD]) {
+            $cacher->delete($_[1]);
             return;
         }
     } else {
         # Nope, new entry
-        $self->{"missed"}++;
-        return unless $self->{"load"};
-        my Tie::Cacher::Node ($next, $prev);
-        if ($self->{"count"} >= $self->{"max_count"}) {
+        $cacher->[TC_MISSED]++;
+        return unless $cacher->[TC_LOAD];
+        if ($cacher->[TC_COUNT] >= $cacher->[TC_MAX_COUNT]) {
             # Drop an old one
-            $next = $self->{"head"};
-            $node = $next->{"previous"};
-            $prev = $node->{"previous"};
-            $prev->{"next"} = $next;
-            $next->{"previous"} = $prev;
-            delete $self->{"nodes"}{$node->{"key"}};
+            my $head = $cacher->[TC_HEAD];
+            $node = $head->[TC_PREVIOUS];
+            ($head->[TC_PREVIOUS] = $node->[TC_PREVIOUS])->[TC_NEXT] = $head;
+            delete $cacher->[TC_NODES]{$node->[TC_KEY]};
         } else {
-            $self->{"count"}++;
+            $cacher->[TC_COUNT]++;
             $node = [];
         }
-        $self->{"nodes"}{$_[1]} = $node;
-        $node->{"key"} = $_[1];
+        $cacher->[TC_NODES]{$_[1]} = $node;
+        $node->[TC_KEY] = $_[1];
 
         # Create node in front
-        $prev = $self->{"head"};
-        $next = $prev->{"next"};
-        $prev->{"next"} = $node;
-        $node->{"next"} = $next;
-        $node->{"previous"} = $prev;
-        $next->{"previous"} = $node;
+        my $head = $node->[TC_PREVIOUS] = $cacher->[TC_HEAD];
+        my $next = $node->[TC_NEXT]	= $head->[TC_NEXT];
+        $head->[TC_NEXT] = $next->[TC_PREVIOUS] = $node;
+
         push(@_, $node);
     }
     eval {
-        &{$self->{"load"}};
-        &{$self->{"save"}} if $self->{"save"};
+        &{$cacher->[TC_LOAD]};
+        &{$cacher->[TC_SAVE]} if $cacher->[TC_SAVE];
     };
     return $node unless $@;
-    $self->delete($_[1]);
+    $cacher->delete($_[1]);
     die $@;
 }
 
 sub keys : method {
-    my __PACKAGE__ $self = shift;
-    return CORE::keys %{$self->{"nodes"}};
+    my $cacher = shift;
+    return CORE::keys %{$cacher->[TC_NODES]};
 }
 
 sub FIRSTKEY {
@@ -305,10 +280,10 @@ sub FIRSTKEY {
 }
 
 sub first_key {
-    my __PACKAGE__ $self = shift;
-    CORE::keys %{$self->{"nodes"}};
-    return each %{$self->{"nodes"}} unless wantarray;
-    my @work = each %{$self->{"nodes"}} or return;
+    my $cacher = shift;
+    CORE::keys %{$cacher->[TC_NODES]};
+    return each %{$cacher->[TC_NODES]} unless wantarray;
+    my @work = each %{$cacher->[TC_NODES]} or return;
     return ($work[0], $work[1][0]);
 }
 
@@ -321,9 +296,9 @@ sub NEXTKEY {
 }
 
 sub next_key {
-    my __PACKAGE__ $self = shift;
-    return each %{$self->{"nodes"}} unless wantarray;
-    my @work = each %{$self->{"nodes"}} or return;
+    my $cacher = shift;
+    return each %{$cacher->[TC_NODES]} unless wantarray;
+    my @work = each %{$cacher->[TC_NODES]} or return;
     return ($work[0], $work[1][0]);
 }
 
@@ -336,8 +311,8 @@ sub EXISTS {
 }
 
 sub exists : method {
-    my __PACKAGE__ $self = shift;
-    return exists $self->{"nodes"}{$_[0]};
+    my $cacher = shift;
+    return exists $cacher->[TC_NODES]{$_[0]};
 }
 
 sub DELETE {
@@ -349,35 +324,50 @@ sub DELETE {
 }
 
 sub delete : method {
-    my __PACKAGE__ $self = shift;
-    unless (defined(wantarray)) {
-        for (@_) {
-            my Tie::Cacher::Node $node = delete $self->{"nodes"}{$_} || next;
-            $self->{"count"}--;
+    my $cacher = shift;
+    if (@_ != 1) {
+        return unless @_;
+        if (defined(wantarray)) {
+            return map {
+                if (my $node = delete $cacher->[TC_NODES]{$_}) {
+                    $cacher->[TC_COUNT]--;
 
-            # Detach node
-            my Tie::Cacher::Node $next = $node->{"next"};
-            my Tie::Cacher::Node $prev = $node->{"previous"};
-            $prev->{"next"} = $next;
-            $next->{"previous"} = $prev;
-        }
-        return;
-    }
-    my @out = map {
-        if (my Tie::Cacher::Node $node = delete $self->{"nodes"}{$_}) {
-            $self->{"count"}--;
+                    # Detach node
+                    ($node->[TC_NEXT][TC_PREVIOUS] = $node->[TC_PREVIOUS])->[TC_NEXT] = $node->[TC_NEXT];
 
+                    $node->[0];
+                }
+                # if it doesn't exist, the if will already cause an undef
+            } @_ if wantarray;
+            # scalar context
+            my $last = pop;
+            for (@_) {
+                my $node = delete $cacher->[TC_NODES]{$_} || next;
+                $cacher->[TC_COUNT]--;
+
+                # Detach node
+                ($node->[TC_NEXT][TC_PREVIOUS] = $node->[TC_PREVIOUS])->[TC_NEXT] = $node->[TC_NEXT];
+            }
+            my $node = delete $cacher->[TC_NODES]{$last} || return;
+            $cacher->[TC_COUNT]--;
             # Detach node
-            my Tie::Cacher::Node $next = $node->{"next"};
-            my Tie::Cacher::Node $prev = $node->{"previous"};
-            $prev->{"next"} = $next;
-            $next->{"previous"} = $prev;
-            $node->[0];
+            ($node->[TC_NEXT][TC_PREVIOUS] = $node->[TC_PREVIOUS])->[TC_NEXT] = $node->[TC_NEXT];
+            return $node->[0];
         } else {
-            undef;
+            for (@_) {
+                my $node = delete $cacher->[TC_NODES]{$_} || next;
+                $cacher->[TC_COUNT]--;
+                
+                # Detach node
+                ($node->[TC_NEXT][TC_PREVIOUS] = $node->[TC_PREVIOUS])->[TC_NEXT] = $node->[TC_NEXT];
+            }
         }
-    } @_;
-    return wantarray ? @out : $out[-1];
+    } elsif (my $node = delete $cacher->[TC_NODES]{shift()}) {
+        $cacher->[TC_COUNT]--;
+        # Detach node
+        ($node->[TC_NEXT][TC_PREVIOUS] = $node->[TC_PREVIOUS])->[TC_NEXT] = $node->[TC_NEXT];
+        return $node->[0];
+    }
 }
 
 sub CLEAR {
@@ -397,122 +387,109 @@ sub clear {
 }
 
 sub recent_keys {
-    my __PACKAGE__ $self = shift;
     my @keys;
-    my Tie::Cacher::Node $head = $self->{"head"};
-    for (my Tie::Cacher::Node $here = $head->{"next"}; $here != $head; $here = $here->{"next"}) {
-        push(@keys, $here->{"key"});
+    my $head = shift->[TC_HEAD];
+    for (my $here = $head->[TC_NEXT]; $here != $head; $here = $here->[TC_NEXT]) {
+        push(@keys, $here->[TC_KEY]);
     }
     return @keys;
 }
 
 sub old_keys {
-    my __PACKAGE__ $self = shift;
     my @keys;
-    my Tie::Cacher::Node $head = $self->{"head"};
-    for (my Tie::Cacher::Node $here = $head->{"previous"}; $here != $head; $here = $here->{"previous"}) {
-        push(@keys, $here->{"key"});
+    my $head = shift->[TC_HEAD];
+    for (my $here = $head->[TC_PREVIOUS]; $here != $head; $here = $here->[TC_PREVIOUS]) {
+        push(@keys, $here->[TC_KEY]);
     }
     return @keys;
 }
 
 sub most_recent_key {
-    my __PACKAGE__ $self = shift;
-    my Tie::Cacher::Node $head = $self->{"head"};
-    my Tie::Cacher::Node $here = $head->{"next"};
+    my $head = shift->[TC_HEAD];
+    my $here = $head->[TC_NEXT];
     return if $here == $head;
-    return $here->{"key"}
+    return $here->[TC_KEY]
 }
 
 sub oldest_key {
-    my __PACKAGE__ $self = shift;
-    my Tie::Cacher::Node $head = $self->{"head"};
-    my Tie::Cacher::Node $here = $head->{"previous"};
+    my $head = shift->[TC_HEAD];
+    my $here = $head->[TC_PREVIOUS];
     return if $here == $head;
-    return $here->{"key"}
+    return $here->[TC_KEY]
 }
 
 sub count {
-    my __PACKAGE__ $self = shift;
-    return $self->{"count"}
+    return shift->[TC_COUNT]
 }
 
 sub missed {
-    my __PACKAGE__ $self = shift;
-    if (@_) {
-        my $old = $self->{"missed"};
-        $self->{"missed"} = shift;
-        return $old;
-    }
-    return $self->{"missed"}
+    return shift->[TC_MISSED] if @_ < 2;
+    my $cacher = shift;
+    my $old = $cacher->[TC_MISSED];
+    $cacher->[TC_MISSED] = shift;
+    return $old;
 }
 
 sub hit {
-    my __PACKAGE__ $self = shift;
-    if (@_) {
-        my $old = $self->{"hit"};
-        $self->{"hit"} = shift;
-        return $old;
-    }
-    return $self->{"hit"}
+    return shift->[TC_HIT] if @_ < 2;
+    my $cacher = shift;
+    my $old = $cacher->[TC_HIT];
+    $cacher->[TC_HIT] = shift;
+    return $old;
 }
 
 sub max_count {
-    my __PACKAGE__ $self = shift;
+    my $cacher = shift;
     if (@_) {
-        my $old = $self->{"max_count"};
+        my $old = $cacher->[TC_MAX_COUNT];
         if (defined(my $val = shift)) {
             croak "max_count must be at least 1" if $val < 1;
-            $self->{"max_count"} = $val;
+            $cacher->[TC_MAX_COUNT] = $val;
         } else {
-            $self->{"max_count"} = INF;
+            $cacher->[TC_MAX_COUNT] = INF;
         }
         return if $old == INF;
         return $old;
     }
-    return if $self->{max_count} == INF;
-    return $self->{max_count}
+    return if $cacher->[TC_MAX_COUNT] == INF;
+    return $cacher->[TC_MAX_COUNT]
 }
 
 sub validate {
-    my __PACKAGE__ $self = shift;
-    if (@_) {
-        my $old = $self->{"validate"};
-        $self->{"validate"} = shift;
-        return $old;
-    }
-    return $self->{"validate"}
+    return shift->[TC_VALIDATE] if @_ < 2;
+    my $cacher = shift;
+    my $old = $cacher->[TC_VALIDATE];
+    $cacher->[TC_VALIDATE] = shift;
+    return $old;
 }
 
 sub load {
-    my __PACKAGE__ $self = shift;
-    if (@_) {
-        my $old = $self->{"load"};
-        $self->{"load"} = shift;
-        return $old;
-    }
-    return $self->{"load"}
+    return shift->[TC_LOAD] if @_ < 2;
+    my $cacher = shift;
+    my $old = $cacher->[TC_LOAD];
+    $cacher->[TC_LOAD] = shift;
+    return $old;
 }
 
 sub save {
-    my __PACKAGE__ $self = shift;
-    if (@_) {
-        my $old = $self->{"save"};
-        $self->{"save"} = shift;
-        return $old;
-    }
-    return $self->{"save"}
+    return shift->[TC_SAVE] if @_ < 2;
+    my $cacher = shift;
+    my $old = $cacher->[TC_SAVE];
+    $cacher->[TC_SAVE] = shift;
+    return $old;
 }
 
 sub user_data {
-    my __PACKAGE__ $self = shift;
-    if (@_) {
-        my $old = $self->{"head"}[0];
-        $self->{"head"}[0] = shift;
-        return $old;
-    }
-    return $self->{"head"}[0];
+    return shift->[TC_HEAD][0] if @_ < 2;
+    my $cacher = shift;
+    my $old = $cacher->[TC_HEAD][0];
+    $cacher->[TC_HEAD][0] = shift;
+    return $old;
 }
+
+1;
+
+__END__
 
 =head1 NAME
 
@@ -618,7 +595,7 @@ at index 0, followed by a few internal fields. You are however free to
 put extra associated data in this array after them or even do things like
 bless the array. This gives you an easy way to decorate values.
 
-=over 4
+=over
 
 =item X<new>$cache = Tie::Cacher->new($max_count)
 
@@ -631,7 +608,7 @@ Creates a new Tie::Cache object. Will throw an exception on failure
 
 Options are name value pairs, where the following are currently recognized:
 
-=over 8
+=over
 
 =item X<option_validate>validate => \&code
 

@@ -1,5 +1,5 @@
-Tie/Cacher version 0.03
-=======================
+Tie/Cacher version
+==================
 
 Tie::Cacher - Cache a (sub)set of key/value pairs. Tie and OO interface.
 
@@ -98,7 +98,9 @@ Please also read the perlmodinstall man page, if available.
 
 DEPENDENCIES
 
-This module does not requires any other modules.
+This module requires these other modules and libraries:
+
+  Test::More, but only in order to run the tests
 
 AUTHOR
 

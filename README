@@ -1,7 +1,7 @@
 Tie/Cacher version 0.03
 =======================
 
-Tie::Cacher - Cache a (sub)set of tag/value pairs. Tie and OO interface.
+Tie::Cacher - Cache a (sub)set of key/value pairs. Tie and OO interface.
 
 DESCRIPTION
 

@@ -5,7 +5,7 @@ use warnings;
 
 use AutoLoader qw(AUTOLOAD);
 
-our $VERSION = "0.03";
+our $VERSION = "0.04";
 use Carp;
 
 use base qw(Tie::Hash);
@@ -22,19 +22,24 @@ use fields qw(key previous next);
 
 package Tie::Cacher;
 
-# Dirty hacks 
+# Dirty hacks
 use constant KEY       => $Tie::Cacher::Node::FIELDS{"key"};
 use constant PREVIOUS  => $Tie::Cacher::Node::FIELDS{"previous"};
 use constant NEXT      => $Tie::Cacher::Node::FIELDS{"next"};
 use constant NODE_SIZE => 1+NEXT;
 
+my %attributes = map {($_, 1)} qw(validate load save max_count user_data);
 sub new {
     defined(my $class = shift) ||
         croak "Too few arguments. Usage: Tie::Cacher->new(key-val-pairs)";
-    my __PACKAGE__ $self = [];
+    my __PACKAGE__ $self = bless [], $class;
+
     my Tie::Cacher::Node $head = [];
     $self->{"head"} = $head;
+    $head->{"next"} = $head;
+    $head->{"previous"} = $head;
     $self->{"hit"} = $self->{"missed"} = $self->{"count"} = 0;
+    $self->{"max_count"} = INF;
     $self->{"nodes"} = {};
 
     if (@_ % 2) {
@@ -50,36 +55,11 @@ sub new {
     }
     while (@_) {
         my $key = shift;
-        if ($key eq "validate") {
-            croak "Multiple $key keys in $class->new, $class" if 
-                $self->{"validate"};
-            $self->{"validate"} = shift;
-        } elsif ($key eq "load") {
-            croak "Multiple $key keys in $class->new, $class" if
-                $self->{"load"};
-            $self->{"load"} = shift;
-        } elsif ($key eq "save") {
-            croak "Multiple $key keys in $class->new, $class" if
-                $self->{"save"};
-            $self->{"save"} = shift;
-        } elsif ($key eq "max_count") {
-            croak "Multiple $key keys in $class->new, $class" if
-                $self->{"max_count"};
-            $self->{"max_count"} = shift;
-            croak "max_count must be at least 1 in $class->new, $class" if
-                $self->{"max_count"} < 1;
-        } elsif ($key eq "user_data") {
-            croak "Multiple $key keys in $class->new, $class" if
-                $head->[0];
-            $head->[0] = shift;
-        } else {
-            croak "Unknown key $key in $class->new, $class";
-        }
+        $attributes{$key} || croak "Unknown key $key in $class->new, $class";
+        $self->$key(shift);
     }
-    $head->{"next"} = $head;
-    $head->{"previous"} = $head;
     $self->{"max_count"} ||= INF;	# Infinity really
-    return bless $self, $class;
+    return $self;
 }
 
 sub DESTROY {
@@ -161,7 +141,13 @@ sub store {
 
     if ($self->{"save"}) {
         splice(@_, 2, 1, $node);
-        goto $self->{"save"};
+        eval {
+            &{$self->{"save"}};
+        };
+        if ($@) {
+            $self->delete($_[1]);
+            die $@;
+        }
     }
 }
 
@@ -453,43 +439,84 @@ sub count {
 
 sub missed {
     my __PACKAGE__ $self = shift;
+    if (@_) {
+        my $old = $self->{"missed"};
+        $self->{"missed"} = shift;
+        return $old;
+    }
     return $self->{"missed"}
 }
 
 sub hit {
     my __PACKAGE__ $self = shift;
+    if (@_) {
+        my $old = $self->{"hit"};
+        $self->{"hit"} = shift;
+        return $old;
+    }
     return $self->{"hit"}
 }
 
 sub max_count {
     my __PACKAGE__ $self = shift;
+    if (@_) {
+        my $old = $self->{"max_count"};
+        if (defined(my $val = shift)) {
+            croak "max_count must be at least 1" if $val < 1;
+            $self->{"max_count"} = $val;
+        } else {
+            $self->{"max_count"} = INF;
+        }
+        return if $old == INF;
+        return $old;
+    }
     return if $self->{max_count} == INF;
     return $self->{max_count}
 }
 
 sub validate {
     my __PACKAGE__ $self = shift;
+    if (@_) {
+        my $old = $self->{"validate"};
+        $self->{"validate"} = shift;
+        return $old;
+    }
     return $self->{"validate"}
 }
 
 sub load {
     my __PACKAGE__ $self = shift;
+    if (@_) {
+        my $old = $self->{"load"};
+        $self->{"load"} = shift;
+        return $old;
+    }
     return $self->{"load"}
 }
 
 sub save {
     my __PACKAGE__ $self = shift;
+    if (@_) {
+        my $old = $self->{"save"};
+        $self->{"save"} = shift;
+        return $old;
+    }
     return $self->{"save"}
 }
 
 sub user_data {
     my __PACKAGE__ $self = shift;
+    if (@_) {
+        my $old = $self->{"head"}[0];
+        $self->{"head"}[0] = shift;
+        return $old;
+    }
     return $self->{"head"}[0];
 }
 
 =head1 NAME
 
-Tie::Cacher - Cache a (sub)set of tag/value pairs. Tie and OO interface.
+Tie::Cacher - Cache a (sub)set of key/value pairs. Tie and OO interface.
 
 =head1 SYNOPSIS
 
@@ -523,14 +550,22 @@ Tie::Cacher - Cache a (sub)set of tag/value pairs. Tie and OO interface.
   $cache->clear;
 
   $nr_keys = $cache->count;
-  $hit = $cache->hit;
-  $missed = $cache->missed;
 
-  $max_count = $cache->max_count;
-  $validate  = $cache->validate;
-  $load      = $cache->load;
-  $save      = $cache->save;
-  $user_data = $cache->user_data;
+  $hit = $cache->hit;
+  $old_hit = $cache->hit($new_hit);
+  $missed = $cache->missed;
+  $old_missed = $cache->missed($new_missed);
+
+  $max_count     = $cache->max_count;
+  $old_max_count = $cache->max_count($new_max_count);
+  $validate      = $cache->validate;
+  $old_validate  = $cache->validate($new_validate);
+  $load          = $cache->load;
+  $old_load      = $cache->load($new_load);
+  $save          = $cache->save;
+  $old_save      = $cache->save($new_save);
+  $user_data     = $cache->user_data;
+  $old_user_data = $cache->user_data($new_user_data);
 
   # The Tie interface:
   use Tie::Cacher;
@@ -621,8 +656,8 @@ won't be any implied L<save|"option_save"> call, so you'll have to do that
 yourself if you want it).
 
 If the code dies, the exception will be passed to the application, but
-The L<hit|"hit"> counter will have been increased and the key will have been
-marked as recently used.
+The L<hit|"hit"> counter will have been increased, the key will still be in
+the cache and will have been marked as recently used.
 
 =item X<option_load>load => \&load
 
@@ -638,9 +673,8 @@ The $load code reference should now somehow get a value corresponding to $key
 (e.g. by looking it up in a database or doing a complex calculation or
 whatever) and then store this new value in $node->[0]. If it fails it should
 throw an exception (which will B<not> be caught and passed on to the caller of
-L<fetch|"fetch"> or L<fetch_node|"fetch_node">. However, an entry for the
-key B<will> have been created (with value undef), but no
-L<save callback|"option_save"> will be called for it).
+L<fetch|"fetch"> or L<fetch_node|"fetch_node">. The entry will be removed from
+the cache and no L<save callback|"option_save"> will be called for it).
 
 =item X<option_save>save => \&save
 
@@ -657,7 +691,7 @@ The code is called like:
 where the value is in $node->[0].
 
 If this code dies, the exception is passed on to the application, but the
-value will remain in the cache.
+key will be removed from the cache.
 
 =item X<option_max_count>max_count => size
 
@@ -668,7 +702,8 @@ given size, the oldest entry will be dropped from the cache to make place.
 =item X<option_user_data>user_data => value
 
 This option allows you to associate one scalar value with the cache object.
-You can retrieve it with the L<user_data|"user_data"> method.
+You can retrieve it with the L<user_data|"user_data"> method. The user_data
+is undef if it has never been set.
 
 =back
 
@@ -683,6 +718,8 @@ new value is now stored there.
 The node with the new value now gets the newest timestamp.
 
 In either case, the L<save callback|"option_save"> is called if one exists.
+If a L<save callback|"option_save"> is called and throws an exception, the
+key is removed from the cache.
 
 The L<hit|"hit"> and L<missed|"missed"> counters will remain untouched for
 all cases.
@@ -707,12 +744,12 @@ produce a value (or throw an exception). If there is a
 L<save callback|"option_save">, that will now be called to e.g. store the new
 value in long term storage. After that, the new value is returned.
 
-If the L<load callback|"option_load"> callback throws an exception, a value
-for the key will still have been created (the value is undef), but no
-L<save callback|"option_save"> will actually have been called for this value.
+If the L<load callback|"option_load"> callback throws an exception, the key is
+deleted from the cache (even if it existed before and failed a validate) and no
+L<save callback|"option_save"> will be called for this value.
 
 Notice that if fetch returns undef, you don't normally know if this means that
-the associated value is undef or if the key didn't exist at all. You can
+the associated value is "undef" or if the key didn't exist at all. You can
 check using L<exists|"exists"> or do the fetch with L<fetch_node|"fetch_node">.
 
 =item X<fetch_node>$node = $cache->fetch_node($key)
@@ -750,11 +787,11 @@ This is notably slower than using L<keys|"keys">
 
 =item X<most_recent_key>$key = $cache->most_recent_key
 
-Returns the most recently used key, or undef if the cache is empty.
+Returns the most recently used key, or "undef" if the cache is empty.
 
 =item X<oldest_key>$key = $cache->oldest_key
 
-Returns the least recently used key, or undef if the cache is empty.
+Returns the least recently used key, or "undef" if the cache is empty.
 
 =item $key = $cache->first_key
 
@@ -827,35 +864,68 @@ context, but does not reset the position for L<next_key|"next_key">
 Return the number of times a L<fetch|"fetch"> or L<fetch_node|"fetch_node">
 on a key found that key to already exist.
 
+=item $old_hit = $cache->hit($new_hit)
+
+Sets the number of hits to $new_hit (typically 0 will be used here).
+Returns the old value
+
 =item X<missed>$missed = $cache->missed
 
 Return the number of times a L<fetch|"fetch"> or L<fetch_node|"fetch_node">
 on a key found that key to not exist yet.
 
+=item $old_missed = $cache->hit($new_missed)
+
+Sets the number of misses to $new_missed (typically 0 will be used here).
+Returns the old value
+
 =item X<max_count>$max_count = $cache->max_count
 
-Returns the maximum number of entries allowed in the cache, or undef if
+Returns the maximum number of entries allowed in the cache, or "undef" if
 there is no maximum.
+
+=item $old_max_count = $cache->max_count($new_max_count)
+
+Sets a new maximum for the number of allowed entries in the cache.
+"undef" means there is no maximum. Returns the old value.
 
 =item X<validate>$validate = $cache->validate
 
-Returns a code reference to the L<validate callback|"option_validate"> or undef
-if there is none.
+Returns a code reference to the L<validate callback|"option_validate"> or 
+"undef" if there is none.
+
+=item $old_validate  = $cache->validate($new_validate)
+
+Sets a new L<validate callback|"option_validate">. "undef" means no more 
+L<validate callback|"option_validate">. Returns the old value.
 
 =item X<load>$load = $cache->load
 
 Returns a code reference to the L<load callback|"option_load"> or undef
 if there is none.
 
+=item $old_load = $cache->load($new_load)
+
+Sets a new L<load callback|"option_load">. "undef" means no more 
+L<load callback|"option_load">. Returns the old value.
+
 =item X<save>$save = $cache->save
 
 Returns a code reference to the L<save callback|"option_save"> or undef
 if there is none.
 
+=item $old_save = $cache->save($new_save)
+
+Sets a new L<save callback|"option_save">. "undef" means no more 
+L<save callback|"option_save">. Returns the old value.
+
 =item X<user>$user_data = $cache->user_data
 
-Returns the L<user_data|"option_user_data"> associated with the cache,
-or undef if there is none.
+Returns the L<user_data|"option_user_data"> associated with the cache.
+
+=item $old_user_data = $cache->user_data($new_user_data)
+
+Sets a new value as the L<user data|"option_user_data">. Returns the old value.
 
 =item $tied = tie %cache, 'Tie::Cache', $max_count
 
@@ -886,6 +956,32 @@ directly get the value without any L<validation|"option_validate">,
 L<loading|"option_load"> or L<saving|"option_save">.
 
 =back
+
+=head1 EXAMPLE
+
+Here's a simple memoized fibonacci:
+
+  use Tie::Cacher;
+  my $fibo = Tie::Cacher->new(load => sub {
+                                  my ($self, $key, $node) = @_;
+                                  $node->[0] = $self->fetch($key-1) +
+                                               $self->fetch($key-2);
+                              });
+  $fibo->store(0 => 0);
+  $fibo->store(1 => 1);
+  print $fibo->fetch(20), "\n";
+
+or as a tie:
+
+  use Tie::Cacher;
+  tie my %fibo, "Tie::Cacher", load => sub {
+                                  my ($self, $key, $node) = @_;
+                                  $node->[0] = $self->fetch($key-1) +
+                                               $self->fetch($key-2);
+                              };
+  $fibo{0} = 0;
+  $fibo{1} = 1;
+  print "$fibo{20}\n";
 
 =head1 SEE ALSO
 

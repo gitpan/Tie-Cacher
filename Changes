@@ -10,3 +10,10 @@ Revision history for Perl extension Tie::Cacher.
 
 0.03  Mon May  5
         - Last cleanups for CPAN distribution
+
+0.04  Tue May  6
+        - Change docs for failing load
+        - failing save causes entry to be deleted
+          (only did that in the fetch case, now also for store)
+        - Allow the attribute methods to also set values. Use these
+          even in "new" so subclasses can override them.

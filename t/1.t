@@ -1,16 +1,11 @@
 # Before `make install' is performed this script should be runnable with
 # `make test'. After `make install' it should work as `perl 1.t'
 
-# todo:
-# - load dying is untested. Should create undef value and not call save
-# - save dying is untested
-# - validate dying is untested
-
 use strict;
 use warnings;
 #########################
 
-use Test::More tests => 2941;
+use Test::More tests => 3057;
 BEGIN { $^W = 1 };
 BEGIN { use_ok('Tie::Cacher') };
 
@@ -428,17 +423,22 @@ for my $class (qw( MapTie Tie::Cacher)) {
         is($data1->$_, $options{$_}, "Option $_ fetchable after set");
     }
 
-    say("$class: Testing option duplicate detection");
-    for (keys %options) {
-        $data1 = eval { $class->new(%options, $_, $options{$_}); };
-        ok($@, "new with extra $_ must croak");
-    }
-    $data1 = eval { $class->new(%options, max_count => 4); };
+    say("$class: Testing invalid option");
+    $data1 = eval { $class->new(foo => "bar"); };
     ok($@, "new croaked");
 
     $data1 = eval { $class->new(4); };
     is($@, "", "new croaked");
     is($data1->max_count, 4, "simple max_count interface works");
+
+    # attribute getting/setting
+    my $i = 123;
+    for (keys %options, qw(hit missed)) {
+        $data1->$_(++$i);
+        is($data1->$_, $i, "get what you set");
+        is($data1->$_(undef), $i, "set returns old value");
+        is($data1->$_, undef, "get what you set");
+    }
 
     say("$class: Basic usage");
     basic_run($data, 4);
@@ -524,4 +524,45 @@ for my $class (qw( MapTie Tie::Cacher)) {
                                }); };
     is($@, "", "new croaked");
     basic_run($data, 4, "a");
+
+    # Check load exception
+    $data = $class->new(load => sub { die "\n"; },
+                        validate => sub { 0 },
+                        save => sub {
+                            my ($self, $key, $node) = @_;
+                            push(@save, $key, $node->[0]);
+                        });
+    for (1..2) {
+        $data->store("foo", 5) if $_ == 2;
+        @save = ();
+        eval { $data->fetch("foo"); };
+        ok($@, "load exception");
+        is(@save, 0, "save doesn't get called");
+        ok(!$data->exists("foo"), "failing load doesn't create value");
+    }
+    empty_test($data);
+
+    # Check save exception
+    $data = $class->new(load => sub {
+        my ($self, $key, $node) = @_;
+        $node->[0] = $key x 2;
+    },
+                        save => sub {
+                            die "\n";
+                        });
+    eval { $data->store("foo", 5) };
+    ok($@, "Failing save dies");
+    ok(!$data->exists("foo"), "failing save doesn't create value");
+    eval { $data->fetch("bar") };
+    ok($@, "Failing save dies");
+    ok(!$data->exists("bar"), "failing save doesn't create value");
+    empty_test($data);
+
+    # Check validate exception
+    $data = $class->new(validate => sub { die "\n" });
+    $data->store("foo", "bar");
+    eval { $data->fetch("foo") };
+    ok($@, "failed validate exception passed on");
+    ok($data->exists("foo"), "failing validate does not delete");
 }
+

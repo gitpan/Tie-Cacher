@@ -5,31 +5,31 @@ use warnings;
 
 use AutoLoader qw(AUTOLOAD);
 
-our $VERSION = "0.06";
+our $VERSION = "0.07";
 use Carp;
 
 use base qw(Tie::Hash);
-use constant {
-    # Cacher indices
-    TC_HEAD	=> 1,
-    TC_NODES	=> 2,
-    TC_HIT	=> 3,
-    TC_MISSED	=> 4,
-    TC_COUNT	=> 5,
-    TC_MAX_COUNT=> 6,
-    TC_VALIDATE => 7,
-    TC_LOAD	=> 8,
-    TC_SAVE	=> 9,
 
-    # Node indices
-    TC_KEY       => 1,
-    TC_PREVIOUS  => 2,
-    TC_NEXT      => 3,
-    TC_NODE_SIZE => 4,
+sub TC_HEAD()	{ 0 };
+sub TC_NODES()	{ 1 };
+sub TC_HIT()	{ 2 };
+sub TC_MISSED()	{ 3 };
+sub TC_COUNT()	{ 4 };
+sub TC_MAX_COUNT() { 5 };
+sub TC_VALIDATE() { 6 };
+sub TC_LOAD()	{ 7 };
+sub TC_SAVE()	{ 8 };
+sub TC_USER_DATA() { 9 };
 
-    # This should effectively give us +inf
-    INF		=> 1e5000000000,
-};
+# Node indices
+sub TC_DATA()	{ 0 };	# Must be zero (documented as valid accessmethod)
+sub TC_KEY()	{ 1 };
+sub TC_PREVIOUS() { 2 };
+sub TC_NEXT()	{ 3 };
+sub TC_NODE_SIZE() { 4 };
+
+# This should effectively give us +inf
+sub INF() { 1e5000000000 };
 
 # We could get the effect of count by using keys, but it would reset
 # first_key/last_key
@@ -127,7 +127,7 @@ sub store {
         $cacher->[TC_NODES]{$_[1]} = $node = [];
         $node->[TC_KEY] = $_[1];
     }
-    $node->[0] = $_[2];
+    $node->[TC_DATA] = $_[2];
 
     # Reattach node in front
     my $head = $node->[TC_PREVIOUS] = $cacher->[TC_HEAD];
@@ -170,9 +170,9 @@ sub fetch {
         my $next = $node->[TC_NEXT]	    = $head->[TC_NEXT];
         $head->[TC_NEXT] = $next->[TC_PREVIOUS] = $node;
 
-        return $node->[0] unless $cacher->[TC_VALIDATE];
+        return $node->[TC_DATA] unless $cacher->[TC_VALIDATE];
         push(@_, $node);
-        return $node->[0] if &{$cacher->[TC_VALIDATE]};
+        return $node->[TC_DATA] if &{$cacher->[TC_VALIDATE]};
         unless ($cacher->[TC_LOAD]) {
             $cacher->delete($_[1]);
             return;
@@ -205,7 +205,7 @@ sub fetch {
         &{$cacher->[TC_LOAD]};
         &{$cacher->[TC_SAVE]} if $cacher->[TC_SAVE];
     };
-    return $node->[0] unless $@;
+    return $node->[TC_DATA] unless $@;
     $cacher->delete($_[1]);
     die $@;
 }
@@ -284,7 +284,7 @@ sub first_key {
     CORE::keys %{$cacher->[TC_NODES]};
     return each %{$cacher->[TC_NODES]} unless wantarray;
     my @work = each %{$cacher->[TC_NODES]} or return;
-    return ($work[0], $work[1][0]);
+    return ($work[0], $work[1][TC_DATA]);
 }
 
 sub NEXTKEY {
@@ -299,7 +299,7 @@ sub next_key {
     my $cacher = shift;
     return each %{$cacher->[TC_NODES]} unless wantarray;
     my @work = each %{$cacher->[TC_NODES]} or return;
-    return ($work[0], $work[1][0]);
+    return ($work[0], $work[1][TC_DATA]);
 }
 
 sub EXISTS {
@@ -312,7 +312,7 @@ sub EXISTS {
 
 sub exists : method {
     my $cacher = shift;
-    return exists $cacher->[TC_NODES]{$_[0]};
+    return exists $cacher->[TC_NODES]{shift()};
 }
 
 sub DELETE {
@@ -335,7 +335,7 @@ sub delete : method {
                     # Detach node
                     ($node->[TC_NEXT][TC_PREVIOUS] = $node->[TC_PREVIOUS])->[TC_NEXT] = $node->[TC_NEXT];
 
-                    $node->[0];
+                    $node->[TC_DATA];
                 }
                 # if it doesn't exist, the if will already cause an undef
             } @_ if wantarray;
@@ -352,7 +352,7 @@ sub delete : method {
             $cacher->[TC_COUNT]--;
             # Detach node
             ($node->[TC_NEXT][TC_PREVIOUS] = $node->[TC_PREVIOUS])->[TC_NEXT] = $node->[TC_NEXT];
-            return $node->[0];
+            return $node->[TC_DATA];
         } else {
             for (@_) {
                 my $node = delete $cacher->[TC_NODES]{$_} || next;
@@ -366,7 +366,7 @@ sub delete : method {
         $cacher->[TC_COUNT]--;
         # Detach node
         ($node->[TC_NEXT][TC_PREVIOUS] = $node->[TC_PREVIOUS])->[TC_NEXT] = $node->[TC_NEXT];
-        return $node->[0];
+        return $node->[TC_DATA];
     }
 }
 
@@ -480,10 +480,10 @@ sub save {
 }
 
 sub user_data {
-    return shift->[TC_HEAD][0] if @_ < 2;
+    return shift->[TC_HEAD][TC_USER_DATA] if @_ < 2;
     my $cacher = shift;
-    my $old = $cacher->[TC_HEAD][0];
-    $cacher->[TC_HEAD][0] = shift;
+    my $old = $cacher->[TC_HEAD][TC_USER_DATA];
+    $cacher->[TC_HEAD][TC_USER_DATA] = shift;
     return $old;
 }
 
